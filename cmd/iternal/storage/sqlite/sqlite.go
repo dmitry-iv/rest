@@ -1,83 +1,81 @@
 package sqlite
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/mattn/go-sqlite3"
 	"goland/cmd/iternal/storage"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
-type Storage struct {
-	db *sql.DB
+type URL struct {
+	gorm.Model
+	Alias string `gorm:"unique;not null"`
+	URL   string `gorm:"not null"`
 }
 
+type Storage struct {
+	db *gorm.DB
+}
+
+func (s *Storage) GetAllURLs() ([]URL, error) {
+	var urls []URL
+	err := s.db.Find(&urls).Error
+	return urls, err
+}
+
+//go:generate mockery --name=Storage --output=./mocks --outpkg=mocks --with-expecter
 func New(storagePath string) (*Storage, error) {
-	const op = "storage.sqlite.New"
-	db, err := sql.Open("sqlite3", storagePath)
+	const op = "storage.postgres.New"
+
+	dsn := "host=localhost user=postgres password=123 dbname=storage port=5432 sslmode=disable"
+	// Использование:
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
-	stmt, err := db.Prepare(`
-	CREATE TABLE IF NOT EXISTS url(
-		id INTEGER PRIMARY KEY,
-		alias TEXT NOT NULL UNIQUE,
-		url TEXT NOT NULL);
-	CREATE INDEX IF NOT EXISTS idx_alias ON url(alias);
-	`)
+	// Миграции
+	err = db.AutoMigrate(&URL{})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
-	_, err = stmt.Exec()
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", op, err)
-	}
+
 	return &Storage{db: db}, nil
 }
-
 func (s *Storage) SaveURL(urlToSave string, alias string) (int64, error) {
 	const op = "storage.sqlite.SaveURL"
 
-	stmt, err := s.db.Prepare("INSERT INTO url(url, alias) VALUES(?, ?)")
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", op, err)
+	url := URL{
+		Alias: alias,
+		URL:   urlToSave,
 	}
 
-	res, err := stmt.Exec(urlToSave, alias)
-	if err != nil {
-		if sqliteErr, ok := err.(sqlite3.Error); ok && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+	result := s.db.Create(&url)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrDuplicatedKey) {
 			return 0, fmt.Errorf("%s: %w", op, storage.ErrURLExist)
 		}
-		return 0, fmt.Errorf("%s: %w", op, err)
+		return 0, fmt.Errorf("%s: %w", op, result.Error)
 	}
 
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("%s: failed to get last insert id: %w", op, err)
-	}
-
-	return id, nil
+	return int64(url.ID), nil
 }
 
 func (s *Storage) GetURL(alias string) (string, error) {
 	const op = "storage.sqlite.GetURL"
 
-	stmt, err := s.db.Prepare("SELECT alias, url FROM url WHERE alias = ?")
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", op, err)
-	}
+	var url URL
+	result := s.db.Where("alias = ?", alias).First(&url)
 
-	var resURL string
-
-	err = stmt.QueryRow(alias).Scan(&resURL)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return "", storage.ErrURLNotFound
 	}
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", op, err)
+	if result.Error != nil {
+		return "", fmt.Errorf("%s: %w", op, result.Error)
 	}
-	return resURL, nil
+
+	return url.URL, nil
 }
 
 //func (s *Storage) DeleteURL(alias string) error {

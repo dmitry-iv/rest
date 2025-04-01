@@ -3,10 +3,12 @@ package main
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/render"
 	"goland/cmd/iternal/config"
 	"goland/cmd/iternal/http-server/handler/redirect"
 	"goland/cmd/iternal/http-server/handler/url/save"
 	mwLogger "goland/cmd/iternal/http-server/middleware/logger"
+	resp "goland/cmd/iternal/lib/api/response"
 	"goland/cmd/iternal/lib/logger/handlers/slogpretty"
 	"goland/cmd/iternal/lib/logger/sl"
 	"goland/cmd/iternal/storage/sqlite"
@@ -47,7 +49,14 @@ func main() {
 	router.Use(mwLogger.New(log))
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.URLFormat)
-
+	router.Get("/admin/urls", func(w http.ResponseWriter, r *http.Request) {
+		urls, err := storage.GetAllURLs()
+		if err != nil {
+			render.JSON(w, r, resp.Error("failed to fetch URLs"))
+			return
+		}
+		render.JSON(w, r, urls)
+	})
 	router.Route("/url", func(r chi.Router) {
 		r.Use(middleware.BasicAuth("url-shortener", map[string]string{
 			cfg.HTTPServer.User: cfg.HTTPServer.Password,
